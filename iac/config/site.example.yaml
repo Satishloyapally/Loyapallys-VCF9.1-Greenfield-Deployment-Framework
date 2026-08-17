@@ -1,0 +1,283 @@
+# =========================================================================== #
+# VCF 9.1 Greenfield Site Definition
+#
+# This file is the single source of truth for an entire VCF 9.1 deployment.
+# Every Terraform stage reads it, so you describe your site exactly once:
+# no values are duplicated between stages and nothing is copied by hand.
+#
+#   cp config/site.example.yaml config/site.yaml   # site.yaml is git-ignored
+#
+# Passwords NEVER live in this file. Each stage takes its secrets from a
+# git-ignored secrets.auto.tfvars (see the .example file in every stage).
+#
+# The example below is a complete, internally consistent addressing plan
+# for a single-rack greenfield site. Replace hostnames, VLANs and subnets
+# with your own; docs/prerequisites.md contains the planning worksheet.
+# =========================================================================== #
+
+site:
+  name: dc01                      # short site identifier, used in object names
+  dns_domain: vcf.example.com
+  dns_servers: [172.16.10.4, 172.16.10.5]
+  ntp_servers: [172.16.10.4]
+  ceip_enabled: false
+  fips_enabled: false
+
+vcf:
+  version: "9.1.0.0"              # this framework targets VCF 9.1 only
+
+# --------------------------------------------------------------------------- #
+# Stage 00 - VCF Installer appliance (deployed by scripts/deploy-installer.sh)
+# --------------------------------------------------------------------------- #
+installer:
+  hostname: vcf-installer         # FQDN becomes vcf-installer.vcf.example.com
+  ip: 172.16.11.5
+  netmask: 255.255.255.0
+  gateway: 172.16.11.1
+  # The ESXi host the installer OVA is pushed to (any of the four seed hosts)
+  target_host: m01-esx01.vcf.example.com
+  target_datastore: local-datastore
+  target_portgroup: VM Network
+
+# --------------------------------------------------------------------------- #
+# Stage 10 - Management domain bring-up
+# --------------------------------------------------------------------------- #
+management_domain:
+  datacenter: dc01-datacenter
+  cluster: dc01-mgmt-01
+
+  # Four seed hosts, freshly installed with ESXi 9 and reachable by FQDN
+  hosts:
+    - m01-esx01.vcf.example.com
+    - m01-esx02.vcf.example.com
+    - m01-esx03.vcf.example.com
+    - m01-esx04.vcf.example.com
+
+  networks:
+    VM_MANAGEMENT:                # VCF appliances (vCenter, NSX, SDDC Manager...)
+      portgroup: dc01-mgmt-01-pg-vm-mgmt
+      vlan_id: 1611
+      subnet: 172.16.11.0/24
+      gateway: 172.16.11.1
+      mtu: 1500
+    MANAGEMENT:                   # ESXi host management (vmk0)
+      portgroup: dc01-mgmt-01-pg-mgmt
+      vlan_id: 1610
+      subnet: 172.16.10.0/24
+      gateway: 172.16.10.1
+      mtu: 1500
+    VMOTION:
+      portgroup: dc01-mgmt-01-pg-vmotion
+      vlan_id: 1612
+      subnet: 172.16.12.0/24
+      gateway: 172.16.12.1
+      mtu: 9000
+      ip_range: { start: 172.16.12.11, end: 172.16.12.50 }
+    VSAN:
+      portgroup: dc01-mgmt-01-pg-vsan
+      vlan_id: 1613
+      subnet: 172.16.13.0/24
+      gateway: 172.16.13.1
+      mtu: 9000
+      ip_range: { start: 172.16.13.11, end: 172.16.13.50 }
+
+  dvs:
+    name: dc01-mgmt-01-vds
+    mtu: 9000
+    uplinks: [uplink1, uplink2]
+    vmnic_mapping: { uplink1: vmnic0, uplink2: vmnic1 }
+
+  vsan:
+    esa_enabled: true             # requires vSAN ESA ReadyNodes; set false for OSA
+    failures_to_tolerate: 1
+
+  sddc_manager:
+    hostname: sddc-manager.vcf.example.com
+
+  vcenter:
+    hostname: vc-mgmt-01.vcf.example.com
+    size: medium
+
+  nsx:
+    vip_fqdn: nsx-mgmt-01.vcf.example.com
+    manager_size: medium
+    manager_hostnames:            # one for labs, three for production
+      - nsx-mgmt-01a.vcf.example.com
+      - nsx-mgmt-01b.vcf.example.com
+      - nsx-mgmt-01c.vcf.example.com
+    transport_vlan_id: 1614       # host TEP VLAN
+    host_tep_pool:
+      cidr: 172.16.14.0/24
+      gateway: 172.16.14.1
+      range: { start: 172.16.14.11, end: 172.16.14.100 }
+
+  # Bring-up runs for several hours. Raise the create timeout for large or
+  # slow fabrics; omit the block to use the provider default. Workload domains
+  # (stage 40) and edge clusters (stage 50) accept the same optional
+  # `timeouts:` block (create/update[/delete/read]).
+  timeouts:
+    create: 6h
+
+  # Optional fleet components: delete any block you do not want deployed.
+  operations:
+    appliance_size: small
+    nodes:
+      - { hostname: ops-01a.vcf.example.com, type: master }
+
+  operations_collector:
+    hostname: ops-collector-01.vcf.example.com
+    appliance_size: small
+
+  fleet_management:
+    hostname: fleet-01.vcf.example.com
+
+  automation:
+    hostname: auto-01.vcf.example.com
+    node_prefix: auto
+    ip_pool: [172.16.11.41, 172.16.11.42]
+    internal_cluster_cidr: 198.18.0.0/15
+
+# --------------------------------------------------------------------------- #
+# Stage 20 - Network pools for workload capacity
+# --------------------------------------------------------------------------- #
+network_pools:
+  dc01-wld-pool-01:
+    VMOTION:
+      vlan_id: 1632
+      mtu: 9000
+      subnet: 172.16.32.0
+      mask: 255.255.255.0
+      gateway: 172.16.32.1
+      range: { start: 172.16.32.11, end: 172.16.32.100 }
+    VSAN:
+      vlan_id: 1633
+      mtu: 9000
+      subnet: 172.16.33.0
+      mask: 255.255.255.0
+      gateway: 172.16.33.1
+      range: { start: 172.16.33.11, end: 172.16.33.100 }
+
+# --------------------------------------------------------------------------- #
+# Stage 30 - Host commissioning (free capacity for workload domains)
+# --------------------------------------------------------------------------- #
+commission_hosts:
+  w01-esx01.vcf.example.com: { network_pool: dc01-wld-pool-01, storage_type: VSAN_ESA }
+  w01-esx02.vcf.example.com: { network_pool: dc01-wld-pool-01, storage_type: VSAN_ESA }
+  w01-esx03.vcf.example.com: { network_pool: dc01-wld-pool-01, storage_type: VSAN_ESA }
+  w01-esx04.vcf.example.com: { network_pool: dc01-wld-pool-01, storage_type: VSAN_ESA }
+
+# --------------------------------------------------------------------------- #
+# Stage 40 - Workload domains (repeat the block to add more)
+# --------------------------------------------------------------------------- #
+workload_domains:
+  dc01-wld-01:
+    vcenter:
+      fqdn: vc-wld-01.vcf.example.com
+      ip_address: 172.16.11.50
+      subnet_mask: 255.255.255.0
+      gateway: 172.16.11.1
+      datacenter: dc01-wld-01-datacenter
+      size: medium
+
+    # Uncomment for an isolated SSO domain (default joins the management SSO)
+    # sso:
+    #   domain_name: wld01.local
+
+    nsx:
+      vip_ip: 172.16.11.60
+      vip_fqdn: nsx-wld-01.vcf.example.com
+      form_factor: medium
+      subnet_mask: 255.255.255.0
+      gateway: 172.16.11.1
+      managers:
+        - { fqdn: nsx-wld-01a.vcf.example.com, ip_address: 172.16.11.61 }
+        - { fqdn: nsx-wld-01b.vcf.example.com, ip_address: 172.16.11.62 }
+        - { fqdn: nsx-wld-01c.vcf.example.com, ip_address: 172.16.11.63 }
+
+    clusters:
+      dc01-wld-01-cl01:
+        hosts:                    # FQDNs from commission_hosts above
+          - w01-esx01.vcf.example.com
+          - w01-esx02.vcf.example.com
+          - w01-esx03.vcf.example.com
+          - w01-esx04.vcf.example.com
+        vsan:
+          esa_enabled: true
+          failures_to_tolerate: 1
+        vds:
+          vmnics: [vmnic0, vmnic1]
+        host_tep:
+          vlan_id: 1634
+          cidr: 172.16.34.0/24
+          gateway: 172.16.34.1
+          range: { start: 172.16.34.11, end: 172.16.34.100 }
+
+# --------------------------------------------------------------------------- #
+# Stage 50 - NSX edge clusters (north-south routing per workload domain)
+# --------------------------------------------------------------------------- #
+edge_clusters:
+  dc01-wld-01-ec01:
+    workload_domain: dc01-wld-01
+    compute_cluster: dc01-wld-01-cl01
+    form_factor: MEDIUM
+    high_availability: ACTIVE_ACTIVE
+    mtu: 9000
+
+    routing:
+      type: EBGP                  # EBGP (recommended) or STATIC
+      local_asn: 65100
+      peer_asn: 65000
+
+    management_network:
+      portgroup: dc01-wld-01-cl01-pg-mgmt
+      vlan_id: 1610
+      gateway: 172.16.10.1
+
+    edge_tep:
+      vlan_id: 1635
+      gateway: 172.16.35.1
+
+    nodes:
+      en01.vcf.example.com:
+        management_ip: 172.16.10.71
+        tep_ips: [172.16.35.11, 172.16.35.12]
+        uplinks:
+          - { vlan_id: 1620, interface_ip: 172.16.20.2/24, peer_ip: 172.16.20.1 }
+          - { vlan_id: 1621, interface_ip: 172.16.21.2/24, peer_ip: 172.16.21.1 }
+      en02.vcf.example.com:
+        management_ip: 172.16.10.72
+        tep_ips: [172.16.35.13, 172.16.35.14]
+        uplinks:
+          - { vlan_id: 1620, interface_ip: 172.16.20.3/24, peer_ip: 172.16.20.1 }
+          - { vlan_id: 1621, interface_ip: 172.16.21.3/24, peer_ip: 172.16.21.1 }
+
+# --------------------------------------------------------------------------- #
+# Stage 60 - Supervisor (vSphere Kubernetes) per workload cluster
+# --------------------------------------------------------------------------- #
+supervisors:
+  dc01-wld-01-sup01:
+    workload_domain: dc01-wld-01  # supplies the vCenter + NSX endpoints
+    datacenter: dc01-wld-01-datacenter
+    cluster: dc01-wld-01-cl01
+    vds_name: dc01-wld-01-cl01-vds
+    edge_cluster: dc01-wld-01-ec01
+    storage_policy: vSAN Default Storage Policy
+    control_plane_size: SMALL
+
+    management_network:
+      portgroup: dc01-wld-01-cl01-pg-mgmt
+      starting_address: 172.16.10.80   # five consecutive addresses reserved
+      subnet_mask: 255.255.255.0
+      gateway: 172.16.10.1
+
+    networks:
+      ingress_cidr: 10.60.0.0/24  # routable via the Tier-0 (advertised by BGP)
+      egress_cidr: 10.61.0.0/24   # routable via the Tier-0 (advertised by BGP)
+      pod_cidr: 10.244.0.0/20     # private
+      service_cidr: 10.96.0.0/22  # private
+
+    content_library:
+      datastore: dc01-wld-01-cl01-vsan
+
+    namespaces:
+      dev-team-01: {}

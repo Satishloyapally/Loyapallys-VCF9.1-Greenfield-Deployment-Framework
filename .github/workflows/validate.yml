@@ -1,0 +1,46 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  terraform:
+    name: fmt + validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt
+        run: terraform fmt -check -diff -recursive iac/modules iac/stages
+
+      - name: Provide a site definition for validation
+        run: cp iac/config/site.example.yaml iac/config/site.yaml
+
+      - name: terraform validate (all stages)
+        run: |
+          set -e
+          for stage in iac/stages/*/; do
+            [ -f "$stage/providers.tf" ] || continue
+            echo "== $stage"
+            terraform -chdir="$stage" init -backend=false -input=false > /dev/null
+            terraform -chdir="$stage" validate
+          done
+
+  scripts:
+    name: shellcheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck iac/scripts/*.sh

@@ -1,0 +1,23 @@
+variable "site_config" {
+  description = "Path to the site definition YAML."
+  type        = string
+  default     = "../../config/site.yaml"
+}
+
+variable "allow_unverified_tls" {
+  description = "Accept SDDC Manager's self-signed certificate."
+  type        = bool
+  default     = true
+}
+
+variable "sddc_manager_username" {
+  description = "SSO account used against the SDDC Manager API."
+  type        = string
+  default     = "administrator@vsphere.local"
+}
+
+variable "sddc_manager_password" {
+  description = "Password for the SDDC Manager API account."
+  type        = string
+  sensitive   = true
+}

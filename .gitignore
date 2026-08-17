@@ -1,0 +1,24 @@
+# Terraform
+# NOTE: .terraform.lock.hcl is intentionally committed (per stage) so provider
+# versions and hashes are reproducible across machines and CI.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Secrets and site-specific configuration - never commit these
+*.tfvars
+!*.tfvars.example
+iac/config/site.yaml
+
+# Generated artifacts
+generated/
+*.ova
+*.iso
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
